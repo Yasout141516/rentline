@@ -42,7 +42,7 @@ rentline/
       openapi.ts       OpenAPI document built from the Zod schemas
     test/
     scripts/seed.ts
-  web/                 Next.js (App Router) + TypeScript + Tailwind
+  web/                 Next.js (App Router) + TypeScript + Tailwind + shadcn/ui
   supabase/
     migrations/        plain SQL migrations: the source of truth for the schema and RLS
     config.toml
@@ -63,7 +63,7 @@ rentline/
 | Payments | Stripe Checkout, test mode, `cad`, card only |
 | Email | Resend **(call)**; with no API key set, emails are logged instead of sent |
 | Tests | Vitest + Supertest against a real local Supabase |
-| Web | Next.js (App Router), Tailwind, supabase-js for sign-in only (same base stack as the author's Ebb project) |
+| Web | Next.js (App Router), Tailwind, **shadcn/ui**, lucide-react, next-themes, supabase-js for sign-in only (same base stack as the author's Ebb project); visual design in §13 |
 | Hosting | API on Render, web on Vercel, Supabase hosted **(call)** |
 | Timezone | All dates ("today", due dates, months) use `America/Toronto` **(call)** |
 
@@ -172,8 +172,9 @@ wrapper library is needed). Every failure class has a named result:
 | `POST /internal/jobs/run` | GitHub Actions | header `X-Job-Secret`; optional `as_of` date, accepted only when `ALLOW_AS_OF=true` (dev/test/demo) |
 
 **Landlord dashboard summary** (`GET /v1/dashboard`, landlord): total outstanding, number of
-overdue invoices, open maintenance count, and payments received this month. It's one endpoint so
-the web app's home page is one call.
+overdue invoices, open maintenance count, payments received this month, and `months` (charged
+and collected per month for the last 12, for the chart in §13). It's one endpoint so the web
+app's home page is one call.
 
 ## 6. Money rules
 
@@ -358,26 +359,65 @@ committed change always has its email queued.
 
 ## 13. Web app
 
-Plain, clean and responsive (Tailwind, no component library needed). It uses supabase-js for
-sign-in and sign-up only, and calls the API for everything else.
+It uses supabase-js for sign-in and sign-up only, and calls the API for everything else.
 
-**Public:** `/login`, `/signup` (role picker), `/check-email`
+### Visual design: "G · shadcn/ui" (owner's choice, 2026-11-09)
 
-**Landlord**
-- `/landlord`: dashboard summary, overdue invoices, open maintenance
-- `/landlord/properties` and `/landlord/properties/[id]`: properties, units, add and edit
-- `/landlord/leases`, `/landlord/leases/new`, `/landlord/leases/[id]`: invoices with status,
-  the ledger with running balance, payments, resend invite
-- `/landlord/maintenance` and `/landlord/maintenance/[id]`: list, detail with photos, status
-  buttons
+The approved drafts are on the "G · shadcn/ui (chosen)" page of the design canvas (a private
+claude.ai artifact; screenshots go in `docs/ui/` when the web app is built). The look is
+standard shadcn/ui, so the drafts map one-to-one onto real components:
 
-**Tenant**
-- `/tenant`: current balance, next due date, unpaid invoices with "Pay"
-- `/tenant/invoices/[id]`: amount owed, pay box (pre-filled with the full outstanding amount and
-  editable down), its ledger rows
-- `/tenant/payments`: history; the return page from Stripe polls until the payment is no
-  longer `pending`
-- `/tenant/maintenance`, `/tenant/maintenance/new`, `/tenant/maintenance/[id]`
+| Concern | Choice |
+|---|---|
+| Components | shadcn/ui (Radix primitives, copied into `web/components/ui`): Sidebar, Card, Badge, Tabs, Table, Dialog, Sheet, Alert, RadioGroup, Input, Select, Textarea, Checkbox, Button |
+| Styling | Tailwind CSS with shadcn's CSS-variable theme; **zinc** neutrals; primary = zinc-900 (white in dark mode) |
+| Type | **Geist** for text, **Geist Mono** for references and keyboard hints; money uses tabular figures |
+| Icons | lucide-react (stroke icons, `aria-hidden` when decorative, `aria-label` on icon-only buttons) |
+| Theme | Light by default, dark via `next-themes` (`class` strategy); every screen must work in both |
+| Status colours | Never colour alone: a dot **and** a word (Paid, Partly paid, Overdue · 39d, Due Nov 15) |
+| Layout | Landlord: inset sidebar layout. Tenant: top nav, max-width 1040px. Responsive down to 375px; wide tables scroll inside their card |
+| Voice | Plain words that say what happened and what to do: "October rent is 39 days late", never "Delinquency detected" |
+
+### Screens (route → drafted screen)
+
+**Public**
+- `/login`: split layout; email and password, plus one-click **demo account** buttons and a
+  "resets nightly" note (the live demo is login-only, §17)
+- `/signup`: landlord / tenant **role picker** cards; the tenant hint explains invite-email
+  linking. Hidden in production (`NEXT_PUBLIC_SIGNUP_ENABLED=false`)
+- `/check-email`: confirm-your-address message
+
+**Landlord** (sidebar: Overview, Rent roll, Properties, Payments, Maintenance)
+- `/landlord`: four summary cards (collected this month, overdue, collection rate this year,
+  open maintenance), a **charged vs collected bar chart** (6 months / this year toggle), and the
+  rent-roll table with All / Overdue / Due soon / Paid tabs, a filter box and row actions
+- `/landlord/properties`: one card per property with totals and a units table (tenant, lease,
+  this month's status); "invite sent, not signed up yet" shown for unlinked tenants
+- `/landlord/leases/new`: form grouped as Unit and tenant / Rent / Dates, field-level errors
+  (an overlapping lease shows on the start date and in an alert), and a "What happens next"
+  panel
+- `/landlord/leases/[id]`: balance, rent, late fee and next invoice cards; Ledger / Invoices /
+  Payments / Details tabs; the ledger shows type badges and an **"Added by"** column
+  (Automatic, Stripe, or the landlord's name). **Add credit** opens a Sheet with invoice,
+  amount, required reason and a before/after summary
+- `/landlord/maintenance`: list and detail side by side (Open / In progress / Resolved tabs),
+  a three-step status bar, photos via signed URLs, activity history, and one forward-only
+  status button
+
+**Tenant** (top nav: Home, Invoices, Payments, Maintenance)
+- `/tenant`: an overdue Alert with **Pay now**, balance / next rent / paid this year cards,
+  recent payments, and the open maintenance request
+- `/tenant/invoices`: the invoice list; **Pay** opens a Dialog with Full balance (pre-selected) or
+  Custom amount, the "can't leave less than $1" rule, and "remaining after payment"
+- `/tenant/payments/[id]` (Stripe return): "Confirming your payment" while `pending` (polls
+  every 2 s), then "Payment received"; a cancelled checkout returns to the invoice with the
+  amount freed (§18)
+- `/tenant/maintenance/new`: title, details and up to 3 photos with type and size errors shown
+  per file; `/tenant/maintenance` and `/tenant/maintenance/[id]` list and show requests
+
+**Data the overview needs:** `GET /v1/dashboard` also returns `months`: charged and collected
+cents for each of the last 12 months (one grouped query over the ledger), which feeds the
+chart and the collection-rate card.
 
 ## 14. Testing
 
